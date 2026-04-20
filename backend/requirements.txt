@@ -10,4 +10,3 @@ flask
 flask-cors
 Pillow
 gunicorn 
-python-3.10.13
