@@ -12,6 +12,7 @@ API:
 
 import base64
 import os
+from pathlib import Path
 from threading import Lock
 
 import cv2
@@ -19,10 +20,15 @@ import numpy as np
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from PIL import Image
-from mri_validation import load_mri_reference_profile, validate_mri_like_image
+
+try:
+    from .mri_validation import load_mri_reference_profile, validate_mri_like_image
+except ImportError:
+    from mri_validation import load_mri_reference_profile, validate_mri_like_image
 
 
-MODEL_PATH = "results/best_model.h5"
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_PATH = BASE_DIR / "results" / "best_model.h5"
 IMG_SIZE = (224, 224)
 tf = None
 load_model = None
@@ -179,7 +185,7 @@ def ensure_model_ready():
         if model_init_error is not None:
             return False, model_init_error
 
-        if not os.path.exists(MODEL_PATH):
+        if not MODEL_PATH.exists():
             model_init_error = f"Model not found at {MODEL_PATH}. Run step1_train_model.py first."
             return False, model_init_error
 
@@ -206,7 +212,7 @@ def health():
     return jsonify(
         {
             "status": "ok" if ready else "model_missing",
-            "modelPath": MODEL_PATH,
+            "modelPath": str(MODEL_PATH),
             "modelLoaded": ready,
             "error": error_message,
             "project": "Transfer learning-based detection of fetal brain abnormalities in MRI scans",
