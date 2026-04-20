@@ -1,0 +1,11 @@
+tensorflow>=2.10
+numpy
+pandas
+matplotlib
+scikit-learn
+opencv-python
+seaborn
+streamlit
+flask
+flask-cors
+Pillow

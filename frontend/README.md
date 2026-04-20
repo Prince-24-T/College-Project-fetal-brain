@@ -9,7 +9,7 @@ This folder contains a separate React frontend for the project:
 From the project root:
 
 ```bash
-python backend_api.py
+python app.py
 ```
 
 The API will start on `http://localhost:5000`.
