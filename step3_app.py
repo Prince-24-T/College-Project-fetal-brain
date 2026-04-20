@@ -184,6 +184,63 @@ def compute_gradcam(grad_model, img_array):
     return heatmap.numpy(), float(abnormal_prob[0])
 
 
+def validate_mri_like_image(pil_image):
+    """
+    Lightweight out-of-domain gate.
+    Returns (is_valid, reason). If invalid, prediction is skipped.
+    """
+    rgb = np.array(pil_image.convert("RGB"))
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+
+    channel_delta = float(
+        (
+            np.mean(np.abs(rgb[:, :, 0].astype(np.float32) - rgb[:, :, 1].astype(np.float32)))
+            + np.mean(np.abs(rgb[:, :, 1].astype(np.float32) - rgb[:, :, 2].astype(np.float32)))
+            + np.mean(np.abs(rgb[:, :, 0].astype(np.float32) - rgb[:, :, 2].astype(np.float32)))
+        )
+        / 3.0
+    )
+    mean_saturation = float(np.mean(hsv[:, :, 1]))
+    edges = cv2.Canny(gray, 50, 150)
+    edge_density = float(np.mean(edges > 0))
+
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if np.mean(binary == 255) > 0.5:
+        binary = cv2.bitwise_not(binary)
+
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    largest_area_ratio = 0.0
+    center_offset_ratio = 1.0
+    if num_labels > 1:
+        areas = stats[1:, cv2.CC_STAT_AREA]
+        largest_idx = int(np.argmax(areas)) + 1
+        largest_area = float(stats[largest_idx, cv2.CC_STAT_AREA])
+        largest_area_ratio = largest_area / float(gray.shape[0] * gray.shape[1])
+        cx, cy = centroids[largest_idx]
+        nx = float((cx / gray.shape[1]) - 0.5)
+        ny = float((cy / gray.shape[0]) - 0.5)
+        center_offset_ratio = float(np.sqrt(nx * nx + ny * ny))
+
+    failed_checks = []
+    if channel_delta > 10 or mean_saturation > 35:
+        failed_checks.append("high color content")
+    if edge_density > 0.22:
+        failed_checks.append("natural-image edge pattern")
+    if largest_area_ratio < 0.08 or largest_area_ratio > 0.92:
+        failed_checks.append("invalid foreground shape")
+    if center_offset_ratio > 0.24:
+        failed_checks.append("off-center main structure")
+
+    if len(failed_checks) >= 2:
+        return (
+            False,
+            "Uploaded image does not appear to be a fetal brain MRI slice "
+            f"({', '.join(failed_checks[:2])}).",
+        )
+    return True, ""
+
+
 def overlay_heatmap(pil_image, heatmap, alpha=0.45):
     img = np.array(pil_image.resize(IMG_SIZE))
     if img.ndim == 2:                        # grayscale → RGB
@@ -251,6 +308,10 @@ if uploaded is None:
 # PREDICTION
 # ─────────────────────────────────────────────
 pil_image = Image.open(uploaded).convert("RGB")
+is_mri_like, rejection_reason = validate_mri_like_image(pil_image)
+if not is_mri_like:
+    st.error(rejection_reason + " Please upload a valid fetal brain MRI image.")
+    st.stop()
 
 with st.spinner("Analysing scan…"):
     # Preprocess
