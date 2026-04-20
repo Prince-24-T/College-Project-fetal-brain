@@ -35,7 +35,11 @@ img_to_array = None
 # 3. generates Grad-CAM outputs,
 # 4. returns JSON for the frontend to display.
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=[
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "https://fetal-brain-abnormalities-checker.netlify.app"
+])
 
 
 def image_to_data_url(image_array):
