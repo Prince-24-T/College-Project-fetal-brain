@@ -12,20 +12,21 @@ API:
 
 import base64
 import os
+from threading import Lock
 
 import cv2
 import numpy as np
-import tensorflow as tf
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from PIL import Image
 from mri_validation import load_mri_reference_profile, validate_mri_like_image
-from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing.image import img_to_array
 
 
 MODEL_PATH = "results/best_model.h5"
 IMG_SIZE = (224, 224)
+tf = None
+load_model = None
+img_to_array = None
 
 # This Flask app is the backend server used by the separate React frontend.
 # The frontend sends an uploaded MRI image to this backend, and this backend:
@@ -65,6 +66,7 @@ def prepare_rgb_image(uploaded_file):
     # - converted to array
     # - normalized to [0, 1]
     # - batch dimension added so TensorFlow can predict on it
+    ensure_ml_dependencies()
     pil_image = Image.open(uploaded_file).convert("RGB")
     resized = pil_image.resize(IMG_SIZE)
     img_array = img_to_array(resized) / 255.0
@@ -91,6 +93,7 @@ def build_gradcam(model):
     # - the last convolution layer output
     # - the final model output
     # This helper creates a smaller model that returns both in one forward pass.
+    ensure_ml_dependencies()
     last_conv = model.get_layer("block5_conv3")
     return tf.keras.models.Model(
         inputs=model.inputs,
@@ -108,6 +111,7 @@ def compute_gradcam(grad_model, img_array):
     # - which class the model predicted
     # - gradients of that chosen class with respect to the last conv layer
     # - a normalized Grad-CAM heatmap
+    ensure_ml_dependencies()
     with tf.GradientTape() as tape:
         conv_outputs, predictions = grad_model(img_array)
         abnormal_prob = predictions[:, 0]
@@ -125,13 +129,67 @@ def compute_gradcam(grad_model, img_array):
 
 model = None
 grad_model = None
+model_init_error = None
+model_init_lock = Lock()
+dependency_init_error = None
 
-# When the backend starts, it loads the trained model one time.
-# That way the frontend can make many requests without reloading the model for every image.
-if os.path.exists(MODEL_PATH):
-    model = load_model(MODEL_PATH)
-    grad_model = build_gradcam(model)
-    load_mri_reference_profile()
+
+def ensure_ml_dependencies():
+    global tf, load_model, img_to_array, dependency_init_error
+
+    if tf is not None and load_model is not None and img_to_array is not None:
+        return
+
+    if dependency_init_error is not None:
+        raise RuntimeError(dependency_init_error)
+
+    try:
+        import tensorflow as tensorflow_module
+        from tensorflow.keras.models import load_model as keras_load_model
+        from tensorflow.keras.preprocessing.image import img_to_array as keras_img_to_array
+
+        tf = tensorflow_module
+        load_model = keras_load_model
+        img_to_array = keras_img_to_array
+    except Exception as exc:
+        dependency_init_error = f"Failed to import TensorFlow dependencies: {exc}"
+        raise RuntimeError(dependency_init_error) from exc
+
+
+def ensure_model_ready():
+    """
+    Lazily load model assets after startup so Gunicorn can bind the port quickly.
+    """
+    global model, grad_model, model_init_error
+
+    if model is not None and grad_model is not None:
+        return True, None
+
+    if model_init_error is not None:
+        return False, model_init_error
+
+    with model_init_lock:
+        if model is not None and grad_model is not None:
+            return True, None
+
+        if model_init_error is not None:
+            return False, model_init_error
+
+        if not os.path.exists(MODEL_PATH):
+            model_init_error = f"Model not found at {MODEL_PATH}. Run step1_train_model.py first."
+            return False, model_init_error
+
+        try:
+            ensure_ml_dependencies()
+            loaded_model = load_model(MODEL_PATH)
+            loaded_grad_model = build_gradcam(loaded_model)
+            load_mri_reference_profile()
+            model = loaded_model
+            grad_model = loaded_grad_model
+            return True, None
+        except Exception as exc:
+            model_init_error = f"Failed to load model assets: {exc}"
+            return False, model_init_error
 
 
 @app.get("/api/health")
@@ -140,11 +198,13 @@ def health():
     # - the backend server is running
     # - the model file exists
     # - the model loaded successfully
+    ready, error_message = ensure_model_ready()
     return jsonify(
         {
-            "status": "ok" if model is not None else "model_missing",
+            "status": "ok" if ready else "model_missing",
             "modelPath": MODEL_PATH,
-            "modelLoaded": model is not None,
+            "modelLoaded": ready,
+            "error": error_message,
             "project": "Transfer learning-based detection of fetal brain abnormalities in MRI scans",
         }
     )
@@ -159,8 +219,9 @@ def predict():
     #     fetch(`${API_BASE}/api/predict`, { method: "POST", body: formData })
     #
     # The form field name is "image", so the backend reads request.files["image"].
-    if model is None or grad_model is None:
-        return jsonify({"error": f"Model not found at {MODEL_PATH}. Run step1_train_model.py first."}), 500
+    ready, error_message = ensure_model_ready()
+    if not ready:
+        return jsonify({"error": error_message}), 500
 
     if "image" not in request.files:
         return jsonify({"error": 'No image uploaded. Send multipart/form-data with field name "image".'}), 400

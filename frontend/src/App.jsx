@@ -3,7 +3,7 @@ import { useState } from "react";
 // This is the frontend-to-backend connection point.
 // If no custom environment variable is provided, the React app sends requests
 // to the Flask backend running on http://localhost:5000.
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000";
+const API_BASE = import.meta.env.VITE_API_BASE_URL;
 
 // These cards are just UI content that explain the project idea on the page.
 const featureCards = [
