@@ -7,6 +7,7 @@ Run:
 
 API:
     GET  /api/health
+    GET  /api/model-health
     POST /api/predict  (multipart/form-data with "image")
 """
 
@@ -52,7 +53,7 @@ DEFAULT_CORS_ORIGINS = (
 )
 CORS_ORIGINS = [
     origin.strip()
-    for origin in os.getenv("CORS_ORIGINS", ",".join(DEFAULT_CORS_ORIGINS)).split(",")
+    for origin in os.getenv("CORS_ORIGINS", "*").split(",")
     if origin.strip()
 ]
 CORS(app, resources={r"/api/*": {"origins": CORS_ORIGINS}})
@@ -221,21 +222,32 @@ def ensure_model_ready():
 
 @app.get("/api/health")
 def health():
-    # Frontend or developer can call this route to check whether:
-    # - the backend server is running
-    # - the model file exists
-    # - the model loaded successfully
+    # Lightweight health route for Render. Do not load TensorFlow/model here,
+    # because Render health checks can fail if model loading takes too long.
+    return jsonify(
+        {
+            "status": "ok",
+            "service": "fetal-brain-mri-backend",
+            "modelHealth": "/api/model-health",
+            "predict": "/api/predict",
+        }
+    )
+
+
+@app.get("/api/model-health")
+def model_health():
+    # Manual diagnostic route for checking whether model assets load correctly.
     ready, error_message = ensure_model_ready()
     return jsonify(
         {
-            "status": "ok" if ready else "model_missing",
+            "status": "ok" if ready else "model_error",
             "modelPath": str(active_model_path) if active_model_path is not None else None,
             "modelCandidates": [str(path) for path in MODEL_CANDIDATES],
             "modelLoaded": ready,
             "error": error_message,
             "project": "Transfer learning-based detection of fetal brain abnormalities in MRI scans",
         }
-    )
+    ), 200 if ready else 500
 
 
 @app.get("/")
@@ -245,6 +257,7 @@ def index():
             "status": "ok",
             "service": "fetal-brain-mri-backend",
             "health": "/api/health",
+            "modelHealth": "/api/model-health",
             "predict": "/api/predict",
         }
     )

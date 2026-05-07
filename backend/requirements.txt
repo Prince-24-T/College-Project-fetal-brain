@@ -1,12 +1,7 @@
-tensorflow>=2.10
-numpy
-pandas
-matplotlib
-scikit-learn
-opencv-python
-seaborn
-streamlit
+tensorflow-cpu==2.15.1
+numpy<2
+opencv-python-headless
 flask
 flask-cors
 Pillow
-gunicorn 
+gunicorn

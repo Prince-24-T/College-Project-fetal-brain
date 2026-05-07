@@ -49,6 +49,8 @@ and starts the Flask API with:
 gunicorn backend.app:app
 ```
 
-After deploying, open the Render backend URL and check `/api/health`. If prediction
-requests fail from Netlify, make sure the Netlify site URL is included in the
-Render `CORS_ORIGINS` environment variable.
+After deploying, open the Render backend URL and check `/api/health`. That route
+only checks whether the server is alive. To check TensorFlow and model loading,
+open `/api/model-health`. If prediction requests fail from Netlify, make sure
+the Netlify site URL is included in the Render `CORS_ORIGINS` environment
+variable.
