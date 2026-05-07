@@ -9,6 +9,7 @@ Then open http://localhost:8501 in your browser.
 """
 
 import os
+from pathlib import Path
 import cv2
 import numpy as np
 import matplotlib
@@ -148,15 +149,20 @@ html, body, [class*="css"] {
 # ─────────────────────────────────────────────
 # LOAD MODEL (cached)
 # ─────────────────────────────────────────────
-MODEL_PATH = "results/best_model.h5"
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_CANDIDATES = (
+    BASE_DIR / "results" / "best_model.h5",
+    BASE_DIR / "results" / "best_model_phase1.h5",
+)
 IMG_SIZE   = (224, 224)
 
 @st.cache_resource
 def load_vgg_model():
-    if not os.path.exists(MODEL_PATH):
+    model_path = next((path for path in MODEL_CANDIDATES if path.exists()), None)
+    if model_path is None:
         return None
     load_mri_reference_profile()
-    model = load_model(MODEL_PATH)
+    model = load_model(model_path)
     # Build Grad-CAM sub-model
     last_conv  = model.get_layer("block5_conv3")
     grad_model = tf.keras.models.Model(
@@ -222,8 +228,10 @@ st.markdown("""
 # MODEL STATUS
 # ─────────────────────────────────────────────
 if result is None:
-    st.error("⚠️  Model not found at `results/best_model.h5`. "
-             "Please run `step1_train_model.py` first.")
+    st.error(
+        "⚠️  Model not found in `backend/results/`. "
+        "Deploy `best_model.h5` or `best_model_phase1.h5` with the backend."
+    )
     st.stop()
 
 model, grad_model = result

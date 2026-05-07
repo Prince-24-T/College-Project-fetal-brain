@@ -1,9 +1,13 @@
 import { useState } from "react";
 
 // This is the frontend-to-backend connection point.
-// If no custom environment variable is provided, the React app sends requests
-// to the Flask backend running on http://localhost:5000.
-const API_BASE = import.meta.env.VITE_API_BASE_URL;
+// Netlify injects VITE_API_BASE_URL at build time. The deployed Render URL is
+// kept as a fallback so a missed Netlify env var does not silently call localhost.
+const DEFAULT_API_BASE =
+  window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+    ? "http://localhost:5000"
+    : "https://fetal-brain-abnormalities.onrender.com";
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE).replace(/\/$/, "");
 
 // These cards are just UI content that explain the project idea on the page.
 const featureCards = [
@@ -73,6 +77,7 @@ function App() {
     try {
       setLoading(true);
       setError("");
+      setResult(null);
 
       // Frontend -> backend API request:
       // Sends the uploaded MRI image to Flask at /api/predict.
@@ -81,9 +86,28 @@ function App() {
         body: formData,
       });
 
-      // The backend returns JSON containing label, confidence, probabilities,
-      // and Grad-CAM images.
-      const data = await response.json();
+      const contentType = response.headers.get("content-type") || "";
+      const rawBody = await response.text();
+      let data = {};
+
+      // The backend normally returns JSON containing label, confidence,
+      // probabilities, and Grad-CAM images, but local setup errors can return
+      // HTML or an empty body instead.
+      if (rawBody) {
+        if (contentType.includes("application/json")) {
+          try {
+            data = JSON.parse(rawBody);
+          } catch {
+            throw new Error("Backend returned invalid JSON. Check the local backend terminal for the real error.");
+          }
+        } else {
+          throw new Error(
+            "Backend did not return JSON. Make sure the Flask API is running on "
+            + `${API_BASE} and check the backend terminal for errors.`
+          );
+        }
+      }
+
       if (!response.ok) {
         throw new Error(data.error || "Prediction request failed.");
       }
@@ -92,7 +116,12 @@ function App() {
       setResult(data);
     } catch (err) {
       // Any backend/network error is shown to the user in the red message box.
-      setError(err.message || "Something went wrong while connecting to the backend.");
+      const message = err.message || "Something went wrong while connecting to the backend.";
+      setError(
+        message === "Failed to fetch"
+          ? `Could not reach the backend at ${API_BASE}. Check that the Render service is running and CORS allows this Netlify site.`
+          : message
+      );
     } finally {
       setLoading(false);
     }

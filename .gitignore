@@ -1,0 +1,39 @@
+# Python cache/build output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Local environment files
+.env
+.env.local
+.env.development
+.env.production
+.env.deployment
+.env.deploment
+.env.*.local
+!.env.example
+
+# Node/Vite generated output
+node_modules/
+dist/
+
+# Local datasets and generated runtime files
+backend/dataset/
+backend/*.log
+backend/*_stdout.log
+backend/*_stderr.log
+
+# Model artifacts: keep the deployable model, ignore larger local variants
+backend/results/*
+!backend/results/
+!backend/results/best_model_phase1.h5
+
+# Local generated docs/assets not required for deployment
+project_flow_diagram.svg

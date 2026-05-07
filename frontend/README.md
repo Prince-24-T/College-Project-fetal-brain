@@ -32,3 +32,23 @@ If your API runs on a different URL, create a `.env` file in this folder:
 ```bash
 VITE_API_BASE_URL=http://localhost:5000
 ```
+
+## Deployment
+
+Netlify should build from the repository root using `netlify.toml`. That file points
+Netlify to this `frontend` folder and sets:
+
+```bash
+VITE_API_BASE_URL=https://fetal-brain-abnormalities.onrender.com
+```
+
+Render should use the root `render.yaml`, which installs `backend/requirements.txt`
+and starts the Flask API with:
+
+```bash
+gunicorn backend.app:app
+```
+
+After deploying, open the Render backend URL and check `/api/health`. If prediction
+requests fail from Netlify, make sure the Netlify site URL is included in the
+Render `CORS_ORIGINS` environment variable.

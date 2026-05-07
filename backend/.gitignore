@@ -1,3 +1,6 @@
 dataset/
 __pycache__/
-results/
+
+!results/
+results/*
+!results/best_model_phase1.h5

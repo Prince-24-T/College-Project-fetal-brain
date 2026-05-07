@@ -28,7 +28,10 @@ except ImportError:
 
 
 BASE_DIR = Path(__file__).resolve().parent
-MODEL_PATH = BASE_DIR / "results" / "best_model.h5"
+MODEL_CANDIDATES = (
+    BASE_DIR / "results" / "best_model.h5",
+    BASE_DIR / "results" / "best_model_phase1.h5",
+)
 IMG_SIZE = (224, 224)
 tf = None
 load_model = None
@@ -41,11 +44,18 @@ img_to_array = None
 # 3. generates Grad-CAM outputs,
 # 4. returns JSON for the frontend to display.
 app = Flask(__name__)
-CORS(app, origins=[
+DEFAULT_CORS_ORIGINS = (
     "http://localhost:5173",
+    "http://localhost:5174",
     "http://localhost:3000",
-    "https://fetal-brain-abnormalities-checker.netlify.app"
-])
+    "https://fetal-brain-abnormalities-checker.netlify.app",
+)
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", ",".join(DEFAULT_CORS_ORIGINS)).split(",")
+    if origin.strip()
+]
+CORS(app, resources={r"/api/*": {"origins": CORS_ORIGINS}})
 
 
 def image_to_data_url(image_array):
@@ -139,6 +149,7 @@ def compute_gradcam(grad_model, img_array):
 
 model = None
 grad_model = None
+active_model_path = None
 model_init_error = None
 model_init_lock = Lock()
 dependency_init_error = None
@@ -170,7 +181,7 @@ def ensure_model_ready():
     """
     Lazily load model assets after startup so Gunicorn can bind the port quickly.
     """
-    global model, grad_model, model_init_error
+    global model, grad_model, active_model_path, model_init_error
 
     if model is not None and grad_model is not None:
         return True, None
@@ -185,17 +196,23 @@ def ensure_model_ready():
         if model_init_error is not None:
             return False, model_init_error
 
-        if not MODEL_PATH.exists():
-            model_init_error = f"Model not found at {MODEL_PATH}. Run step1_train_model.py first."
+        chosen_model_path = next((path for path in MODEL_CANDIDATES if path.exists()), None)
+        if chosen_model_path is None:
+            searched_paths = ", ".join(str(path) for path in MODEL_CANDIDATES)
+            model_init_error = (
+                "Model not found. Checked: "
+                f"{searched_paths}. Deploy one of these model files with the backend."
+            )
             return False, model_init_error
 
         try:
             ensure_ml_dependencies()
-            loaded_model = load_model(MODEL_PATH)
+            loaded_model = load_model(chosen_model_path)
             loaded_grad_model = build_gradcam(loaded_model)
             load_mri_reference_profile()
             model = loaded_model
             grad_model = loaded_grad_model
+            active_model_path = chosen_model_path
             return True, None
         except Exception as exc:
             model_init_error = f"Failed to load model assets: {exc}"
@@ -212,10 +229,23 @@ def health():
     return jsonify(
         {
             "status": "ok" if ready else "model_missing",
-            "modelPath": str(MODEL_PATH),
+            "modelPath": str(active_model_path) if active_model_path is not None else None,
+            "modelCandidates": [str(path) for path in MODEL_CANDIDATES],
             "modelLoaded": ready,
             "error": error_message,
             "project": "Transfer learning-based detection of fetal brain abnormalities in MRI scans",
+        }
+    )
+
+
+@app.get("/")
+def index():
+    return jsonify(
+        {
+            "status": "ok",
+            "service": "fetal-brain-mri-backend",
+            "health": "/api/health",
+            "predict": "/api/predict",
         }
     )
 
