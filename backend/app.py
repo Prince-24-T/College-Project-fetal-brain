@@ -223,6 +223,27 @@ def patch_keras_h5_model_config(model_path):
         if value.get("class_name") == "InputLayer" and isinstance(config, dict) and "batch_shape" in config:
             config.setdefault("batch_input_shape", config.pop("batch_shape"))
 
+        inbound_nodes = value.get("inbound_nodes")
+        if isinstance(inbound_nodes, list) and inbound_nodes and isinstance(inbound_nodes[0], dict):
+            legacy_nodes = []
+            for node in inbound_nodes:
+                if not isinstance(node, dict):
+                    legacy_nodes.append(node)
+                    continue
+
+                kwargs = node.get("kwargs") or {}
+                legacy_node = []
+                for arg in node.get("args", []):
+                    if not isinstance(arg, dict) or arg.get("class_name") != "__keras_tensor__":
+                        continue
+                    tensor_config = arg.get("config") or {}
+                    keras_history = tensor_config.get("keras_history")
+                    if isinstance(keras_history, list) and len(keras_history) == 3:
+                        legacy_node.append([keras_history[0], keras_history[1], keras_history[2], kwargs])
+
+                legacy_nodes.append(legacy_node)
+            value["inbound_nodes"] = legacy_nodes
+
         for key, child in list(value.items()):
             if (
                 key == "dtype"
