@@ -16,7 +16,7 @@ import os
 import platform
 import traceback
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 
 import cv2
 import numpy as np
@@ -156,6 +156,8 @@ active_model_path = None
 model_init_error = None
 model_init_lock = Lock()
 dependency_init_error = None
+model_warmup_started = False
+model_warmup_lock = Lock()
 
 
 def get_model_file_status():
@@ -233,6 +235,24 @@ def ensure_model_ready():
             return False, model_init_error
 
 
+def start_model_warmup():
+    global model_warmup_started
+
+    if model is not None and grad_model is not None:
+        return False
+
+    with model_warmup_lock:
+        if model_warmup_started:
+            return False
+        model_warmup_started = True
+
+    def warmup():
+        ensure_model_ready()
+
+    Thread(target=warmup, daemon=True).start()
+    return True
+
+
 @app.get("/api/health")
 def health():
     # Lightweight health route for Render. Do not load TensorFlow/model here,
@@ -256,11 +276,8 @@ def model_health():
     error_message = model_init_error or dependency_init_error
 
     if should_load_model:
-        try:
-            ready, error_message = ensure_model_ready()
-        except BaseException as exc:
-            ready = False
-            error_message = f"Model health check crashed while loading assets: {type(exc).__name__}: {exc}"
+        start_model_warmup()
+        error_message = error_message or "Model warmup started. Refresh this endpoint in 1-3 minutes."
 
     return jsonify(
         {
@@ -270,6 +287,7 @@ def model_health():
             "modelLoaded": ready,
             "error": error_message,
             "loadAttempted": should_load_model,
+            "warmupStarted": model_warmup_started,
             "pythonVersion": platform.python_version(),
             "project": "Transfer learning-based detection of fetal brain abnormalities in MRI scans",
         }
@@ -279,7 +297,15 @@ def model_health():
 @app.get("/api/tensorflow-health")
 def tensorflow_health():
     try:
-        ensure_ml_dependencies()
+        start_model_warmup()
+        if tf is None:
+            return jsonify(
+                {
+                    "status": "warming",
+                    "message": "TensorFlow/model warmup started. Refresh this endpoint in 1-3 minutes.",
+                    "pythonVersion": platform.python_version(),
+                }
+            )
         return jsonify(
             {
                 "status": "ok",
