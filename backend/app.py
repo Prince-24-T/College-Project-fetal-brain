@@ -514,3 +514,6 @@ if __name__ == "__main__":
     # The React frontend is written to call this URL by default:
     #     http://localhost:5000
     app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+
+
+start_model_warmup()

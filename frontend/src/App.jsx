@@ -9,6 +9,32 @@ const DEFAULT_API_BASE =
     : "https://fetal-brain-abnormalities.onrender.com";
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE).replace(/\/$/, "");
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const waitForModel = async () => {
+  const maxAttempts = 12;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const response = await fetch(`${API_BASE}/api/model-health?load=1`, {
+      method: "GET",
+      cache: "no-store",
+    });
+
+    const data = await response.json();
+    if (data.modelLoaded) {
+      return;
+    }
+
+    if (data.error && !String(data.error).toLowerCase().includes("warmup")) {
+      throw new Error(data.error);
+    }
+
+    await sleep(10000);
+  }
+
+  throw new Error("The backend model is still warming up. Please try again in a minute.");
+};
+
 // These cards are just UI content that explain the project idea on the page.
 const featureCards = [
   {
@@ -78,6 +104,10 @@ function App() {
       setLoading(true);
       setError("");
       setResult(null);
+
+      setError("Starting backend model. This can take 1-3 minutes after Render wakes up.");
+      await waitForModel();
+      setError("");
 
       // Frontend -> backend API request:
       // Sends the uploaded MRI image to Flask at /api/predict.
