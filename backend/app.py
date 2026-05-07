@@ -18,6 +18,7 @@ import platform
 import shutil
 import tempfile
 import traceback
+import time
 from pathlib import Path
 from threading import Lock, Thread
 
@@ -50,7 +51,7 @@ img_to_array = None
 # 3. generates Grad-CAM outputs,
 # 4. returns JSON for the frontend to display.
 app = Flask(__name__)
-APP_VERSION = "2026-05-07-sync-model-load-v3"
+APP_VERSION = "2026-05-07-background-warmup-v4"
 DEFAULT_CORS_ORIGINS = (
     "http://localhost:5173",
     "http://localhost:5174",
@@ -162,6 +163,9 @@ model_init_lock = Lock()
 dependency_init_error = None
 model_warmup_started = False
 model_warmup_lock = Lock()
+model_warmup_started_at = None
+model_warmup_error = None
+model_warmup_traceback = None
 
 
 def get_model_file_status():
@@ -326,7 +330,7 @@ def ensure_model_ready():
 
 
 def start_model_warmup():
-    global model_warmup_started, model_init_error
+    global model_warmup_started, model_init_error, model_warmup_started_at, model_warmup_error, model_warmup_traceback
 
     if model is not None and grad_model is not None:
         return False
@@ -335,12 +339,18 @@ def start_model_warmup():
         if model_warmup_started:
             return False
         model_init_error = None
+        model_warmup_error = None
+        model_warmup_traceback = None
+        model_warmup_started_at = time.time()
         model_warmup_started = True
 
     def warmup():
-        global model_warmup_started
+        global model_warmup_started, model_warmup_error, model_warmup_traceback
         try:
-            ready, _ = ensure_model_ready()
+            ensure_model_ready()
+        except BaseException as exc:
+            model_warmup_error = f"{type(exc).__name__}: {exc}"
+            model_warmup_traceback = traceback.format_exc()
         finally:
             if model is None or grad_model is None:
                 with model_warmup_lock:
@@ -367,18 +377,17 @@ def health():
 
 @app.get("/api/model-health")
 def model_health():
-    # Default diagnostic route is lightweight. Add ?load=1 to synchronously test
-    # TensorFlow and model loading; Gunicorn timeout is high enough for this.
+    # Default diagnostic route is lightweight. Add ?load=1 to start model
+    # loading in the background so Render's request timeout cannot kill it.
     should_load_model = request.args.get("load") == "1"
     ready = model is not None and grad_model is not None
-    error_message = model_init_error or dependency_init_error
+    elapsed = round(time.time() - model_warmup_started_at, 1) if model_warmup_started_at else None
+    error_message = model_warmup_error or model_init_error or dependency_init_error
 
-    if should_load_model:
-        try:
-            ready, error_message = ensure_model_ready()
-        except BaseException as exc:
-            ready = False
-            error_message = f"Model health check crashed while loading assets: {type(exc).__name__}: {exc}"
+    if should_load_model and not ready and not error_message:
+        started_now = start_model_warmup()
+        elapsed = 0 if started_now else elapsed
+        error_message = "Model warmup started. Refresh this endpoint in 1-3 minutes."
 
     return jsonify(
         {
@@ -388,8 +397,11 @@ def model_health():
             "modelCandidates": get_model_file_status(),
             "modelLoaded": ready,
             "error": error_message,
+            "traceback": model_warmup_traceback,
             "loadAttempted": should_load_model,
-            "loadMode": "sync" if should_load_model else "none",
+            "loadMode": "background" if should_load_model else "none",
+            "warmupStarted": model_warmup_started,
+            "warmupElapsedSeconds": elapsed,
             "pythonVersion": platform.python_version(),
             "project": "Transfer learning-based detection of fetal brain abnormalities in MRI scans",
         }

@@ -12,7 +12,7 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE).replace
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const waitForModel = async () => {
-  const maxAttempts = 12;
+  const maxAttempts = 30;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const response = await fetch(`${API_BASE}/api/model-health?load=1`, {
