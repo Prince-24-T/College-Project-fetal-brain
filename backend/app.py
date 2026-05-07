@@ -50,6 +50,7 @@ img_to_array = None
 # 3. generates Grad-CAM outputs,
 # 4. returns JSON for the frontend to display.
 app = Flask(__name__)
+APP_VERSION = "2026-05-07-keras-h5-compat-v2"
 DEFAULT_CORS_ORIGINS = (
     "http://localhost:5173",
     "http://localhost:5174",
@@ -251,21 +252,14 @@ def patch_keras_h5_model_config(model_path):
 
 def load_keras_model_for_inference(model_path):
     ensure_ml_dependencies()
+    patched_path = patch_keras_h5_model_config(model_path)
     try:
-        return load_model(model_path, compile=False)
-    except Exception as exc:
-        error_text = str(exc)
-        if "batch_shape" not in error_text and "DTypePolicy" not in error_text:
-            raise
-
-        patched_path = patch_keras_h5_model_config(model_path)
+        return load_model(patched_path, compile=False)
+    finally:
         try:
-            return load_model(patched_path, compile=False)
-        finally:
-            try:
-                patched_path.unlink()
-            except OSError:
-                pass
+            patched_path.unlink()
+        except OSError:
+            pass
 
 
 def ensure_model_ready():
@@ -311,7 +305,7 @@ def ensure_model_ready():
 
 
 def start_model_warmup():
-    global model_warmup_started
+    global model_warmup_started, model_init_error
 
     if model is not None and grad_model is not None:
         return False
@@ -319,10 +313,17 @@ def start_model_warmup():
     with model_warmup_lock:
         if model_warmup_started:
             return False
+        model_init_error = None
         model_warmup_started = True
 
     def warmup():
-        ensure_model_ready()
+        global model_warmup_started
+        try:
+            ready, _ = ensure_model_ready()
+        finally:
+            if model is None or grad_model is None:
+                with model_warmup_lock:
+                    model_warmup_started = False
 
     Thread(target=warmup, daemon=True).start()
     return True
@@ -336,6 +337,7 @@ def health():
         {
             "status": "ok",
             "service": "fetal-brain-mri-backend",
+            "version": APP_VERSION,
             "modelHealth": "/api/model-health",
             "predict": "/api/predict",
         }
@@ -357,6 +359,7 @@ def model_health():
     return jsonify(
         {
             "status": "ok" if ready else "model_error",
+            "version": APP_VERSION,
             "modelPath": str(active_model_path) if active_model_path is not None else None,
             "modelCandidates": get_model_file_status(),
             "modelLoaded": ready,
@@ -377,6 +380,7 @@ def tensorflow_health():
             return jsonify(
                 {
                     "status": "warming",
+                    "version": APP_VERSION,
                     "message": "TensorFlow/model warmup started. Refresh this endpoint in 1-3 minutes.",
                     "pythonVersion": platform.python_version(),
                 }
@@ -384,6 +388,7 @@ def tensorflow_health():
         return jsonify(
             {
                 "status": "ok",
+                "version": APP_VERSION,
                 "tensorflowVersion": tf.__version__,
                 "pythonVersion": platform.python_version(),
             }
@@ -392,6 +397,7 @@ def tensorflow_health():
         return jsonify(
             {
                 "status": "tensorflow_error",
+                "version": APP_VERSION,
                 "error": f"{type(exc).__name__}: {exc}",
                 "traceback": traceback.format_exc(),
                 "pythonVersion": platform.python_version(),
@@ -405,6 +411,7 @@ def index():
         {
             "status": "ok",
             "service": "fetal-brain-mri-backend",
+            "version": APP_VERSION,
             "health": "/api/health",
             "modelHealth": "/api/model-health",
             "tensorflowHealth": "/api/tensorflow-health",
