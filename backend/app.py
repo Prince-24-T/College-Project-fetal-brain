@@ -12,8 +12,11 @@ API:
 """
 
 import base64
+import json
 import os
 import platform
+import shutil
+import tempfile
 import traceback
 from pathlib import Path
 from threading import Lock, Thread
@@ -193,6 +196,69 @@ def ensure_ml_dependencies():
         raise RuntimeError(dependency_init_error) from exc
 
 
+def patch_keras_h5_model_config(model_path):
+    """
+    Create a temporary H5 copy with Keras 3 InputLayer config adjusted for
+    TensorFlow/Keras 2.x loaders. The deployed app only needs inference, so the
+    original model file stays untouched.
+    """
+    import h5py
+
+    temp_file = tempfile.NamedTemporaryFile(suffix=".h5", delete=False)
+    temp_path = Path(temp_file.name)
+    temp_file.close()
+    shutil.copy2(model_path, temp_path)
+
+    def patch_layer(layer):
+        config = layer.get("config", {})
+        if layer.get("class_name") == "InputLayer" and "batch_shape" in config:
+            config.setdefault("batch_input_shape", config.pop("batch_shape"))
+
+        nested_config = config.get("config")
+        if isinstance(nested_config, dict):
+            patch_layer(nested_config)
+
+        for key in ("layers", "input_layers", "output_layers"):
+            value = config.get(key)
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        patch_layer(item)
+
+    with h5py.File(temp_path, "r+") as h5_file:
+        raw_config = h5_file.attrs.get("model_config")
+        if raw_config is None:
+            return temp_path
+
+        if isinstance(raw_config, bytes):
+            raw_config = raw_config.decode("utf-8")
+
+        model_config = json.loads(raw_config)
+        for layer in model_config.get("config", {}).get("layers", []):
+            patch_layer(layer)
+        h5_file.attrs.modify("model_config", json.dumps(model_config).encode("utf-8"))
+
+    return temp_path
+
+
+def load_keras_model_for_inference(model_path):
+    ensure_ml_dependencies()
+    try:
+        return load_model(model_path, compile=False)
+    except TypeError as exc:
+        if "batch_shape" not in str(exc):
+            raise
+
+        patched_path = patch_keras_h5_model_config(model_path)
+        try:
+            return load_model(patched_path, compile=False)
+        finally:
+            try:
+                patched_path.unlink()
+            except OSError:
+                pass
+
+
 def ensure_model_ready():
     """
     Lazily load model assets after startup so Gunicorn can bind the port quickly.
@@ -223,7 +289,7 @@ def ensure_model_ready():
 
         try:
             ensure_ml_dependencies()
-            loaded_model = load_model(chosen_model_path)
+            loaded_model = load_keras_model_for_inference(chosen_model_path)
             loaded_grad_model = build_gradcam(loaded_model)
             load_mri_reference_profile()
             model = loaded_model
