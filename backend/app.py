@@ -13,6 +13,7 @@ API:
 
 import base64
 import os
+import platform
 from pathlib import Path
 from threading import Lock
 
@@ -156,6 +157,17 @@ model_init_lock = Lock()
 dependency_init_error = None
 
 
+def get_model_file_status():
+    return [
+        {
+            "path": str(path),
+            "exists": path.exists(),
+            "sizeMB": round(path.stat().st_size / (1024 * 1024), 2) if path.exists() else None,
+        }
+        for path in MODEL_CANDIDATES
+    ]
+
+
 def ensure_ml_dependencies():
     global tf, load_model, img_to_array, dependency_init_error
 
@@ -236,18 +248,52 @@ def health():
 
 @app.get("/api/model-health")
 def model_health():
-    # Manual diagnostic route for checking whether model assets load correctly.
-    ready, error_message = ensure_model_ready()
+    # Default diagnostic route is lightweight. Add ?load=1 to test TensorFlow
+    # and model loading explicitly, because that can be slow/heavy on Render.
+    should_load_model = request.args.get("load") == "1"
+    ready = model is not None and grad_model is not None
+    error_message = model_init_error or dependency_init_error
+
+    if should_load_model:
+        try:
+            ready, error_message = ensure_model_ready()
+        except BaseException as exc:
+            ready = False
+            error_message = f"Model health check crashed while loading assets: {type(exc).__name__}: {exc}"
+
     return jsonify(
         {
             "status": "ok" if ready else "model_error",
             "modelPath": str(active_model_path) if active_model_path is not None else None,
-            "modelCandidates": [str(path) for path in MODEL_CANDIDATES],
+            "modelCandidates": get_model_file_status(),
             "modelLoaded": ready,
             "error": error_message,
+            "loadAttempted": should_load_model,
+            "pythonVersion": platform.python_version(),
             "project": "Transfer learning-based detection of fetal brain abnormalities in MRI scans",
         }
-    ), 200 if ready else 500
+    ), 200
+
+
+@app.get("/api/tensorflow-health")
+def tensorflow_health():
+    try:
+        ensure_ml_dependencies()
+        return jsonify(
+            {
+                "status": "ok",
+                "tensorflowVersion": tf.__version__,
+                "pythonVersion": platform.python_version(),
+            }
+        )
+    except BaseException as exc:
+        return jsonify(
+            {
+                "status": "tensorflow_error",
+                "error": f"{type(exc).__name__}: {exc}",
+                "pythonVersion": platform.python_version(),
+            }
+        ), 500
 
 
 @app.get("/")
@@ -258,6 +304,7 @@ def index():
             "service": "fetal-brain-mri-backend",
             "health": "/api/health",
             "modelHealth": "/api/model-health",
+            "tensorflowHealth": "/api/tensorflow-health",
             "predict": "/api/predict",
         }
     )
