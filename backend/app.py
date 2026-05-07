@@ -14,6 +14,7 @@ API:
 import base64
 import os
 import platform
+import traceback
 from pathlib import Path
 from threading import Lock
 
@@ -291,6 +292,7 @@ def tensorflow_health():
             {
                 "status": "tensorflow_error",
                 "error": f"{type(exc).__name__}: {exc}",
+                "traceback": traceback.format_exc(),
                 "pythonVersion": platform.python_version(),
             }
         ), 500
