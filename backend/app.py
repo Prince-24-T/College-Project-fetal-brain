@@ -209,21 +209,31 @@ def patch_keras_h5_model_config(model_path):
     temp_file.close()
     shutil.copy2(model_path, temp_path)
 
-    def patch_layer(layer):
-        config = layer.get("config", {})
-        if layer.get("class_name") == "InputLayer" and "batch_shape" in config:
+    def normalize_config(value):
+        if isinstance(value, list):
+            for item in value:
+                normalize_config(item)
+            return value
+
+        if not isinstance(value, dict):
+            return value
+
+        config = value.get("config")
+        if value.get("class_name") == "InputLayer" and isinstance(config, dict) and "batch_shape" in config:
             config.setdefault("batch_input_shape", config.pop("batch_shape"))
 
-        nested_config = config.get("config")
-        if isinstance(nested_config, dict):
-            patch_layer(nested_config)
+        for key, child in list(value.items()):
+            if (
+                key == "dtype"
+                and isinstance(child, dict)
+                and child.get("class_name") == "DTypePolicy"
+                and isinstance(child.get("config"), dict)
+            ):
+                value[key] = child["config"].get("name", "float32")
+            else:
+                normalize_config(child)
 
-        for key in ("layers", "input_layers", "output_layers"):
-            value = config.get(key)
-            if isinstance(value, list):
-                for item in value:
-                    if isinstance(item, dict):
-                        patch_layer(item)
+        return value
 
     with h5py.File(temp_path, "r+") as h5_file:
         raw_config = h5_file.attrs.get("model_config")
@@ -233,9 +243,7 @@ def patch_keras_h5_model_config(model_path):
         if isinstance(raw_config, bytes):
             raw_config = raw_config.decode("utf-8")
 
-        model_config = json.loads(raw_config)
-        for layer in model_config.get("config", {}).get("layers", []):
-            patch_layer(layer)
+        model_config = normalize_config(json.loads(raw_config))
         h5_file.attrs.modify("model_config", json.dumps(model_config).encode("utf-8"))
 
     return temp_path
@@ -245,8 +253,9 @@ def load_keras_model_for_inference(model_path):
     ensure_ml_dependencies()
     try:
         return load_model(model_path, compile=False)
-    except TypeError as exc:
-        if "batch_shape" not in str(exc):
+    except Exception as exc:
+        error_text = str(exc)
+        if "batch_shape" not in error_text and "DTypePolicy" not in error_text:
             raise
 
         patched_path = patch_keras_h5_model_config(model_path)
