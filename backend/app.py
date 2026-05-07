@@ -50,7 +50,7 @@ img_to_array = None
 # 3. generates Grad-CAM outputs,
 # 4. returns JSON for the frontend to display.
 app = Flask(__name__)
-APP_VERSION = "2026-05-07-keras-h5-compat-v2"
+APP_VERSION = "2026-05-07-sync-model-load-v3"
 DEFAULT_CORS_ORIGINS = (
     "http://localhost:5173",
     "http://localhost:5174",
@@ -367,15 +367,18 @@ def health():
 
 @app.get("/api/model-health")
 def model_health():
-    # Default diagnostic route is lightweight. Add ?load=1 to test TensorFlow
-    # and model loading explicitly, because that can be slow/heavy on Render.
+    # Default diagnostic route is lightweight. Add ?load=1 to synchronously test
+    # TensorFlow and model loading; Gunicorn timeout is high enough for this.
     should_load_model = request.args.get("load") == "1"
     ready = model is not None and grad_model is not None
     error_message = model_init_error or dependency_init_error
 
     if should_load_model:
-        start_model_warmup()
-        error_message = error_message or "Model warmup started. Refresh this endpoint in 1-3 minutes."
+        try:
+            ready, error_message = ensure_model_ready()
+        except BaseException as exc:
+            ready = False
+            error_message = f"Model health check crashed while loading assets: {type(exc).__name__}: {exc}"
 
     return jsonify(
         {
@@ -386,7 +389,7 @@ def model_health():
             "modelLoaded": ready,
             "error": error_message,
             "loadAttempted": should_load_model,
-            "warmupStarted": model_warmup_started,
+            "loadMode": "sync" if should_load_model else "none",
             "pythonVersion": platform.python_version(),
             "project": "Transfer learning-based detection of fetal brain abnormalities in MRI scans",
         }
@@ -396,16 +399,7 @@ def model_health():
 @app.get("/api/tensorflow-health")
 def tensorflow_health():
     try:
-        start_model_warmup()
-        if tf is None:
-            return jsonify(
-                {
-                    "status": "warming",
-                    "version": APP_VERSION,
-                    "message": "TensorFlow/model warmup started. Refresh this endpoint in 1-3 minutes.",
-                    "pythonVersion": platform.python_version(),
-                }
-            )
+        ensure_ml_dependencies()
         return jsonify(
             {
                 "status": "ok",
@@ -514,6 +508,3 @@ if __name__ == "__main__":
     # The React frontend is written to call this URL by default:
     #     http://localhost:5000
     app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
-
-
-start_model_warmup()
